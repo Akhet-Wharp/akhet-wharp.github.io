@@ -112,6 +112,17 @@ textarea{min-height:120px;font-family:inherit}
 .foto-thumb{width:100%;height:80px;object-fit:cover;border-radius:5px;cursor:pointer;transition:transform 0.3s}
 .foto-thumb:hover{transform:scale(1.05)}
 
+/* Grid responsive per giornali */
+.giornali-grid{display:grid;grid-template-columns:repeat(2, 1fr);gap:15px}
+
+/* Media query per responsive */
+@media (max-width: 768px) {
+    .nav{flex-direction:column}
+    .header{flex-direction:column;align-items:flex-start}
+    .foto-grid{grid-template-columns:repeat(2,1fr)}
+    .giornali-grid{grid-template-columns:1fr !important}
+}
+
 </style>
 </head>
 <body>
@@ -198,11 +209,11 @@ Esporta report mensile in PDF o tutti i punti mappa in GeoJSON per un cantiere
 </p>
 </div>
 </div>
-</div>
 
 <div id="giornaliContent">
 <div class="info">🔍 Seleziona almeno un filtro per visualizzare i giornali</div>
 </div>
+
 </div>
 
 <!-- SEZIONE: NUOVO GIORNALE -->
@@ -792,6 +803,7 @@ let viewCantiereGeoJsonLayer = null;
 let filteredGiornali = [];
 let currentFilters = { cantiere: '', mese: '', giorno: '', stato: '' };
 let filtersActive = false; // Traccia se almeno un filtro è attivo
+let lastActiveTab = 'giornali'; // Traccia l'ultimo tab attivo per resettare i filtri
 
 // Cache foto
 let fotoCache = {};
@@ -814,6 +826,45 @@ let editOperai = [];
 let editFotoEsistenti = []; // Foto già su SharePoint { name, url }
 let editFotoNuove = []; // File nuovi da uploadare
 let editFotoEliminate = []; // Nomi file da eliminare
+
+// ========================================
+// FUNZIONE HELPER: CANTIERI ASSEGNATI
+// ========================================
+
+// Restituisce i cantieri assegnati all'utente corrente
+function getCantieriAssegnati() {
+    // Admin e Supervisor vedono tutti i cantieri
+    if (currentUserRole === 'admin' || currentUserRole === 'supervisor') {
+        return cantieriData;
+    }
+    
+    // Operator: filtra in base ai cantieri assegnati
+    const userEmail = currentUser.username || currentUser.email;
+    const utenteCorrente = utentiData.find(u => 
+        u.email.toLowerCase() === userEmail.toLowerCase()
+    );
+    
+    if (!utenteCorrente || !utenteCorrente.cantieriAssegnati) {
+        // Nessun cantiere assegnato
+        console.log(`⚠️ Nessun cantiere assegnato a ${userEmail}`);
+        return [];
+    }
+    
+    // Estrai gli ID dei cantieri assegnati
+    const cantieriIds = utenteCorrente.cantieriAssegnati
+        .split(',')
+        .map(id => id.trim())
+        .filter(id => id);
+    
+    // Filtra i cantieri
+    const cantieriAssegnati = cantieriData.filter(c => 
+        cantieriIds.includes(String(c.id))
+    );
+    
+    console.log(`🔍 Operator ${userEmail}: ${cantieriAssegnati.length}/${cantieriData.length} cantieri assegnati`);
+    
+    return cantieriAssegnati;
+}
 
 // ========================================
 // AUTENTICAZIONE
@@ -1218,9 +1269,15 @@ async function loadGiornali() {
 function displayCantieri() {
     const container = document.getElementById('cantieriContent');
     
-    if (cantieriData.length === 0) {
+    // Ottieni i cantieri da mostrare in base al ruolo
+    const cantieriDaMostrare = getCantieriAssegnati();
+    
+    if (cantieriDaMostrare.length === 0) {
+        const message = currentUserRole === 'operator' 
+            ? '📋 Nessun cantiere assegnato. Contatta un amministratore.'
+            : '📋 Nessun cantiere presente.';
         container.innerHTML = `
-            <div class="info">📋 Nessun cantiere presente.</div>
+            <div class="info">${message}</div>
             ${(currentUserRole === 'admin' || currentUserRole === 'supervisor') ? '<button class="btn btn-primary" onclick="openModalCantiere()">➕ Nuovo Cantiere</button>' : ''}
         `;
         return;
@@ -1233,7 +1290,7 @@ function displayCantieri() {
     }
     html += '<div style="display:grid;gap:15px">';
     
-    cantieriData.forEach(cantiere => {
+    cantieriDaMostrare.forEach(cantiere => {
         html += `
             <div class="card">
                 <h4>🏗️ ${cantiere.title}</h4>
@@ -1329,6 +1386,7 @@ function displayGiornali() {
     } else {
         // Admin e Supervisor: richiedono filtri
         if (!filtersActive) {
+            filteredGiornali = []; // Reset importante!
             container.innerHTML = '<div class="info">🔍 Seleziona almeno un filtro per visualizzare i giornali</div>';
             return;
         }
@@ -1342,7 +1400,7 @@ function displayGiornali() {
         return;
     }
     
-    let html = '<div style="display:grid;gap:15px">';
+    let html = '<div class="giornali-grid" style="display:grid;grid-template-columns:repeat(2, 1fr);gap:15px">';
     
     filteredGiornali.forEach(giornale => {
         const statusBadge = giornale.validato ? 
@@ -1438,6 +1496,24 @@ function showSection(name) {
         return;
     }
     
+    // Se USCIAMO dal tab giornali verso un altro tab, resetta i filtri
+    if (lastActiveTab === 'giornali' && name !== 'giornali') {
+        console.log('🔄 Resetting filters - leaving Giornali tab to:', name);
+        currentFilters = { cantiere: '', mese: '', giorno: '', stato: '' };
+        filtersActive = false;
+        filteredGiornali = [];
+        
+        // Pulisci i campi del form filtri
+        const filterFields = ['filtCant', 'filtMese', 'filtGiorno', 'filtStato'];
+        filterFields.forEach(fieldId => {
+            const field = document.getElementById(fieldId);
+            if (field) field.value = '';
+        });
+    }
+    
+    // Aggiorna l'ultimo tab attivo
+    lastActiveTab = name;
+    
     // Nascondi tutte le sezioni
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
@@ -1500,9 +1576,14 @@ console.log("✅ App Akhet - Sessione 2 caricata");
 function popCant() {
     const sel = document.getElementById('fCant');
     sel.innerHTML = '<option value="">Seleziona cantiere...</option>';
-    cantieriData.forEach(c => {
+    
+    // Ottieni i cantieri da mostrare in base al ruolo
+    const cantieriDaMostrare = getCantieriAssegnati();
+    
+    cantieriDaMostrare.forEach(c => {
         sel.innerHTML += `<option value="${c.id}">${c.title} - ${c.codiceCommessa}</option>`;
     });
+    
     document.getElementById('fData').valueAsDate = new Date();
 }
 
@@ -2250,16 +2331,27 @@ function populateFilters() {
     // Filtro cantieri
     const selCant = document.getElementById('filtCant');
     selCant.innerHTML = '<option value="">Seleziona...</option>';
+    
+    // Ottieni i cantieri assegnati
+    const cantieriAssegnati = getCantieriAssegnati();
+    const cantieriAssegnatiIds = cantieriAssegnati.map(c => String(c.id));
+    
+    // Trova i cantieri unici che hanno giornali
     const uniqueCant = [...new Set(giornaliData.map(g => g.cantiereId).filter(id => id))];
     
     uniqueCant.forEach(cid => {
+        // Per Operator: mostra solo se il cantiere è assegnato
+        if (currentUserRole === 'operator' && !cantieriAssegnatiIds.includes(String(cid))) {
+            return; // Skip questo cantiere
+        }
+        
         const c = cantieriData.find(x => x.id == cid);
         if (c) {
             selCant.innerHTML += `<option value="${c.id}">${c.title}</option>`;
         }
     });
     
-    console.log(`🔍 Filtro cantieri popolato: ${uniqueCant.length} cantieri disponibili`);
+    console.log(`🔍 Filtro cantieri popolato: ${selCant.options.length - 1} cantieri disponibili`);
     
     // Filtro mesi
     const selMese = document.getElementById('filtMese');
@@ -2897,40 +2989,17 @@ async function generaPDFMensile(cantiere, mese, giornali) {
     const [anno, meseNum] = mese.split('-');
     const nomeMese = new Date(anno, meseNum - 1).toLocaleString('it-IT', { month: 'long', year: 'numeric' });
     
-    // === PRIMA PAGINA - COPERTINA ===
-    doc.setFontSize(20);
-    doc.setFont(undefined, 'bold');
-    doc.text('GIORNALE DEI LAVORI', 105, 40, { align: 'center' });
-    doc.text('REPORT MENSILE', 105, 50, { align: 'center' });
-    
-    doc.setFontSize(14);
-    doc.setFont(undefined, 'normal');
-    doc.text(`Cantiere: ${cantiere.title}`, 105, 70, { align: 'center' });
-    doc.text(`Committente: ${cantiere.committente}`, 105, 80, { align: 'center' });
-    doc.text(`Periodo: ${nomeMese}`, 105, 90, { align: 'center' });
-    doc.text(`N° Giornali: ${giornali.length}`, 105, 100, { align: 'center' });
-    
-    // Logo (se esiste)
-    try {
-        const logoUrl = 'https://akhet.it/wp-content/uploads/2020/06/logo.png';
-        const logoData = await loadImageAsBase64(logoUrl);
-        doc.addImage(logoData, 'PNG', 75, 120, 60, 60);
-    } catch (e) {
-        console.warn('Logo non caricato:', e);
-    }
-    
-    doc.setFontSize(10);
-    doc.text(`Generato il ${new Date().toLocaleDateString('it-IT')}`, 105, 280, { align: 'center' });
-    
     // === PAGINE GIORNALI ===
     for (let i = 0; i < giornali.length; i++) {
         const g = giornali[i];
         
-        // Nuova pagina per ogni giornale
-        doc.addPage();
+        // Aggiungi pagina per ogni giornale (tranne la prima)
+        if (i > 0) {
+            doc.addPage();
+        }
         
-        // Usa la stessa logica di exportPDF ma semplificata
-        await aggiungiGiornaleAPDF(doc, g, i + 1, giornali.length);
+        // Usa la stessa grafica dell'export giornaliero
+        await creaGiornalePDF(doc, g, cantiere, i + 1, giornali.length, nomeMese);
     }
     
     // Salva PDF
@@ -2938,106 +3007,266 @@ async function generaPDFMensile(cantiere, mese, giornali) {
     doc.save(nomeFile);
 }
 
-async function aggiungiGiornaleAPDF(doc, g, numero, totale) {
+async function creaGiornalePDF(doc, g, cantiere, numero, totale, nomeMese) {
+    const pageWidth = 210; // A4 width in mm
     const margin = 15;
-    const contentWidth = 180;
-    let y = 20;
+    const contentWidth = pageWidth - (margin * 2);
+    const rowHeight = 8;
     
-    // Header
-    doc.setFillColor(52, 152, 219);
-    doc.rect(0, 0, 210, 15, 'F');
+    // Colori
+    const borderColor = [0, 0, 0]; // Nero
+    const headerBg = [240, 240, 240]; // Grigio chiaro
     
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(12);
-    doc.setFont(undefined, 'bold');
-    doc.text('GIORNALE DEI LAVORI', margin, 10);
-    doc.text(`${numero}/${totale}`, 195, 10, { align: 'right' });
+    let y = 15;
     
-    doc.setTextColor(0, 0, 0);
-    y = 25;
+    // === LOGO AKHET ===
+    const logoBase64 = 'data:image/png;base64,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';
     
-    // Titolo e data
+    // HEADER con riquadro separato
+    const headerHeight = 20;
+    doc.setDrawColor(...borderColor);
+    doc.setLineWidth(0.3);
+    doc.rect(margin, y, contentWidth, headerHeight);
+    
+    // Titolo a sinistra
     doc.setFontSize(14);
     doc.setFont(undefined, 'bold');
-    doc.text(g.title, margin, y);
+    doc.text('GIORNALE DEI LAVORI', margin + 3, y + 7);
     
-    doc.setFontSize(10);
-    doc.setFont(undefined, 'normal');
-    doc.text(`Data: ${formatDate(g.data)}`, margin, y + 7);
-    
-    if (g.validato) {
-        doc.setFillColor(39, 174, 96);
-        doc.rect(150, y - 5, 45, 8, 'F');
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(8);
-        doc.text('✓ VALIDATO', 172.5, y + 1, { align: 'center' });
-        doc.setTextColor(0, 0, 0);
-    }
-    
-    y += 15;
-    
-    // Info generali
+    // Info sotto al titolo  
     doc.setFontSize(9);
-    doc.text(`Meteo: ${g.meteo} | Agibilità: ${g.agibilita}`, margin, y);
-    y += 7;
+    doc.setFont(undefined, 'normal');
+    doc.text(`${nomeMese} - ${numero}/${totale}`, margin + 3, y + 13);
     
-    // Personale
-    if (g.archeologi && g.archeologi.length > 0) {
-        doc.text(`Archeologi: ${g.archeologi.map(a => `${a.nome} (${a.ore}h)`).join(', ')}`, margin, y);
-        y += 6;
+    // Logo Akhet in alto a destra
+    try {
+        doc.addImage(logoBase64, 'PNG', pageWidth - margin - 14, y + 2, 13.6, 15);
+    } catch (e) {
+        console.warn('Errore nel caricamento logo:', e);
     }
     
-    if (g.operai && g.operai.length > 0) {
-        doc.text(`Operai: ${g.operai.map(o => `${o.nome} (${o.ore}h)`).join(', ')}`, margin, y);
-        y += 6;
-    }
+    y += headerHeight + 8;
     
+    // === INFORMAZIONI CANTIERE E GIORNALE ===
+    doc.setFontSize(9);
+    const col1 = margin;
+    const col2 = margin + (contentWidth / 3);
+    const col3 = margin + (contentWidth * 2 / 3);
+    
+    // Bordi prima riga
+    doc.setDrawColor(...borderColor);
+    doc.setLineWidth(0.3);
+    doc.rect(col1, y, contentWidth, rowHeight * 2);
+    doc.line(col2, y, col2, y + rowHeight * 2);
+    doc.line(col3, y, col3, y + rowHeight * 2);
+    doc.line(col1, y + rowHeight, col1 + contentWidth, y + rowHeight);
+    
+    // Header riga 1
+    doc.setFillColor(...headerBg);
+    doc.rect(col1, y, contentWidth / 3, rowHeight, 'F');
+    doc.rect(col2, y, contentWidth / 3, rowHeight, 'F');
+    doc.rect(col3, y, contentWidth / 3, rowHeight, 'F');
+    
+    doc.setFont(undefined, 'bold');
+    doc.text('COMMITTENTE', col1 + 2, y + 5);
+    doc.text('CODICE COMMESSA', col2 + 2, y + 5);
+    doc.text('CODICE PROGETTO', col3 + 2, y + 5);
+    
+    // Contenuto riga 1
+    doc.setFont(undefined, 'normal');
+    doc.text(String(cantiere?.committente || ''), col1 + 2, y + rowHeight + 5);
+    doc.text(String(cantiere?.codiceCommessa || ''), col2 + 2, y + rowHeight + 5);
+    doc.text(String(cantiere?.codiceProgetto || ''), col3 + 2, y + rowHeight + 5);
+    
+    y += rowHeight * 2 + 3;
+    
+    // === RIGA 2: LOCALITÀ | CODICE SITO | CONDIZIONI METEO | AGIBILITÀ ===
+    const col4Width = contentWidth / 4;
+    const col4_1 = margin;
+    const col4_2 = margin + col4Width;
+    const col4_3 = margin + col4Width * 2;
+    const col4_4 = margin + col4Width * 3;
+    
+    doc.rect(col4_1, y, contentWidth, rowHeight * 2);
+    doc.line(col4_2, y, col4_2, y + rowHeight * 2);
+    doc.line(col4_3, y, col4_3, y + rowHeight * 2);
+    doc.line(col4_4, y, col4_4, y + rowHeight * 2);
+    doc.line(col4_1, y + rowHeight, col4_1 + contentWidth, y + rowHeight);
+    
+    doc.setFillColor(...headerBg);
+    doc.rect(col4_1, y, col4Width, rowHeight, 'F');
+    doc.rect(col4_2, y, col4Width, rowHeight, 'F');
+    doc.rect(col4_3, y, col4Width, rowHeight, 'F');
+    doc.rect(col4_4, y, col4Width, rowHeight, 'F');
+    
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(8);
+    doc.text('LOCALITÀ', col4_1 + 2, y + 5);
+    doc.text('DATA', col4_2 + 2, y + 5);
+    doc.text('CONDIZIONI METEO', col4_3 + 2, y + 5);
+    doc.text('AGIBILITÀ', col4_4 + 2, y + 5);
+    
+    doc.setFont(undefined, 'normal');
+    doc.text(String(g.title || ''), col4_1 + 2, y + rowHeight + 5);
+    doc.text(formatDate(g.data), col4_2 + 2, y + rowHeight + 5);
+    doc.text(String(g.meteo || ''), col4_3 + 2, y + rowHeight + 5);
+    doc.text(String(g.agibilita || ''), col4_4 + 2, y + rowHeight + 5);
+    
+    doc.setFontSize(9);
+    y += rowHeight * 2 + 5;
+    
+    // === ELENCO PERSONALE AKHET ===
+    doc.setFont(undefined, 'bold');
+    doc.text('ELENCO PERSONALE AKHET', margin, y);
     y += 5;
     
-    // Lavori
+    const maxRows = Math.max(
+        g.archeologi ? g.archeologi.length : 0,
+        g.operai ? g.operai.length : 0
+    );
+    const personaleHeight = rowHeight + (maxRows * 5);
+    
+    doc.rect(margin, y, contentWidth, personaleHeight);
+    doc.line(margin + contentWidth / 2, y, margin + contentWidth / 2, y + personaleHeight);
+    doc.line(margin, y + rowHeight, margin + contentWidth, y + rowHeight);
+    
+    doc.setFillColor(...headerBg);
+    doc.rect(margin, y, contentWidth / 2, rowHeight, 'F');
+    doc.rect(margin + contentWidth / 2, y, contentWidth / 2, rowHeight, 'F');
+    
+    const archColWidth = (contentWidth / 2) * 0.75;
+    const oreColWidth = (contentWidth / 2) * 0.25;
+    
+    doc.line(margin + archColWidth, y, margin + archColWidth, y + personaleHeight);
+    doc.line(margin + contentWidth / 2 + archColWidth, y, margin + contentWidth / 2 + archColWidth, y + personaleHeight);
+    
     doc.setFont(undefined, 'bold');
-    doc.text('Descrizione Lavori:', margin, y);
-    y += 6;
+    doc.text('ARCHEOLOGI', margin + 2, y + 5);
+    doc.text('ORE', margin + archColWidth + 2, y + 5);
+    doc.text('OPERAI', margin + contentWidth / 2 + 2, y + 5);
+    doc.text('ORE', margin + contentWidth / 2 + archColWidth + 2, y + 5);
     
     doc.setFont(undefined, 'normal');
-    const lavoriLines = doc.splitTextToSize(g.lavori, contentWidth);
-    doc.text(lavoriLines, margin, y);
-    y += lavoriLines.length * 5 + 5;
+    let rowY = y + rowHeight + 4;
     
-    // Foto (max 4 per giornale)
-    const foto = fotoCache[g.id] || [];
-    if (foto.length > 0) {
-        y += 5;
-        doc.setFont(undefined, 'bold');
-        doc.text('Foto:', margin, y);
-        y += 6;
-        
-        const fotoToShow = foto.slice(0, 4);
-        const fotoWidth = 40;
-        const fotoHeight = 30;
-        const gap = 5;
-        
-        for (let i = 0; i < fotoToShow.length; i++) {
-            if (i > 0 && i % 2 === 0) {
-                y += fotoHeight + gap;
-            }
-            
-            if (y + fotoHeight > 270) break;
-            
-            try {
-                const fotoData = await loadImageAsBase64(fotoToShow[i]);
-                const x = margin + (i % 2) * (fotoWidth + gap);
-                doc.addImage(fotoData, 'JPEG', x, y, fotoWidth, fotoHeight);
-            } catch (e) {
-                console.warn('Foto non caricata:', e);
-            }
+    for (let i = 0; i < maxRows; i++) {
+        if (g.archeologi && i < g.archeologi.length) {
+            const a = g.archeologi[i];
+            const nome = typeof a === 'string' ? a : a.nome;
+            const ore = typeof a === 'string' ? '' : String(a.ore);
+            doc.text(nome, margin + 2, rowY);
+            doc.text(ore, margin + archColWidth + 2, rowY);
         }
+        
+        if (g.operai && i < g.operai.length) {
+            const o = g.operai[i];
+            const nome = typeof o === 'string' ? o : o.nome;
+            const ore = typeof o === 'string' ? '' : String(o.ore);
+            doc.text(nome, margin + contentWidth / 2 + 2, rowY);
+            doc.text(ore, margin + contentWidth / 2 + archColWidth + 2, rowY);
+        }
+        
+        rowY += 5;
     }
     
-    // Footer
+    y += personaleHeight + 5;
+    
+    // === DESCRIZIONE DELLE ATTIVITÀ ===
+    doc.setFont(undefined, 'bold');
+    doc.text('DESCRIZIONE DELLE ATTIVITÀ', margin, y);
+    y += 5;
+    
+    const lavoriLines = doc.splitTextToSize(g.lavori || '', contentWidth - 4);
+    const lavoriHeight = Math.max(30, lavoriLines.length * 4 + 8);
+    
+    doc.rect(margin, y, contentWidth, lavoriHeight);
+    
+    doc.setFont(undefined, 'normal');
     doc.setFontSize(8);
+    let textY = y + 4;
+    lavoriLines.forEach(line => {
+        if (textY < y + lavoriHeight - 2) {
+            doc.text(line, margin + 2, textY);
+            textY += 4;
+        }
+    });
+    doc.setFontSize(9);
+    
+    y += lavoriHeight + 8;
+    
+    // === IMMAGINI FOTOGRAFICHE ===
+    const foto = fotoCache[g.id];
+    if (foto && foto.length > 0) {
+        if (y > 200) {
+            doc.addPage();
+            y = 15;
+        }
+        
+        doc.setFont(undefined, 'bold');
+        doc.text('IMMAGINI FOTOGRAFICHE', margin, y);
+        y += 5;
+        
+        const fotoWidth = (contentWidth - 10) / 3;
+        const fotoHeight = 35;
+        
+        for (let i = 0; i < Math.min(foto.length, 3); i++) {
+            try {
+                const img = await loadImageAsBase64(foto[i]);
+                const x = margin + (i * (fotoWidth + 5));
+                doc.rect(x, y, fotoWidth, fotoHeight);
+                doc.addImage(img, 'JPEG', x + 1, y + 1, fotoWidth - 2, fotoHeight - 2);
+            } catch (e) {
+                console.warn(`Impossibile caricare foto ${i + 1}:`, e);
+                doc.rect(margin + (i * (fotoWidth + 5)), y, fotoWidth, fotoHeight);
+            }
+        }
+        y += fotoHeight + 8;
+    }
+    
+    // === FIRME IN FONDO ===
+    if (y > 240) {
+        doc.addPage();
+        y = 15;
+    } else {
+        y = 260;
+    }
+    
+    const firmeColWidth = contentWidth / 3;
+    
+    doc.rect(margin, y, contentWidth, rowHeight * 3);
+    doc.line(margin + firmeColWidth, y, margin + firmeColWidth, y + rowHeight * 3);
+    doc.line(margin + firmeColWidth * 2, y, margin + firmeColWidth * 2, y + rowHeight * 3);
+    doc.line(margin, y + rowHeight, margin + contentWidth, y + rowHeight);
+    
+    doc.setFillColor(...headerBg);
+    doc.rect(margin, y, contentWidth, rowHeight, 'F');
+    
+    doc.setFont(undefined, 'bold');
+    doc.setFontSize(8);
+    doc.text('ARCHEOLOGO RESPONSABILE', margin + firmeColWidth / 2, y + 5, { align: 'center' });
+    doc.text('DIRETTORE LAVORI', margin + firmeColWidth + firmeColWidth / 2, y + 5, { align: 'center' });
+    doc.text('SOVRINTENDENZA', margin + firmeColWidth * 2 + firmeColWidth / 2, y + 5, { align: 'center' });
+    
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(7);
+    
+    // Testo nome sotto firma
+    const firmeY = y + rowHeight * 2.5;
+    doc.text('NOME E COGNOME', margin + firmeColWidth / 2, firmeY, { align: 'center' });
+    doc.text('NOME E COGNOME', margin + firmeColWidth + firmeColWidth / 2, firmeY, { align: 'center' });
+    doc.text('NOME E COGNOME', margin + firmeColWidth * 2 + firmeColWidth / 2, firmeY, { align: 'center' });
+    
+    // Footer con autore e data creazione
+    doc.setFontSize(7);
     doc.setTextColor(150, 150, 150);
-    doc.text(`Creato da ${g.author} il ${formatDate(g.created)}`, margin, 285);
+    doc.text(`Creato da ${g.author} il ${formatDate(g.created)}`, margin, 287);
+    
+    if (g.validato) {
+        doc.setTextColor(39, 174, 96);
+        doc.text('✓ VALIDATO', pageWidth - margin, 287, { align: 'right' });
+    }
+    
+    doc.setTextColor(0, 0, 0);
 }
 
 // === EXPORT GEOJSON PUNTI MAPPA ===
