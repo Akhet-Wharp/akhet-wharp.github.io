@@ -1705,17 +1705,27 @@ function showSection(name) {
     if (name === 'giornali') {
         displayGiornali();
         
-        // Forza il ridimensionamento della mappa dopo che la sezione è visibile
-        setTimeout(() => {
-            if (map) {
+        // Lazy init mappa: inizializza solo la prima volta che si entra nella sezione
+        if (!map && document.getElementById('map')) {
+            setTimeout(() => {
+                try {
+                    initMap();
+                    console.log('🗺️ Mappa inizializzata (lazy)');
+                } catch(e) {
+                    console.warn('Errore inizializzazione mappa:', e);
+                }
+            }, 100);
+        } else if (map) {
+            // Se già inizializzata, ridimensiona
+            setTimeout(() => {
                 try {
                     map.invalidateSize();
                     console.log('🗺️ Mappa ridimensionata');
                 } catch(e) {
                     console.warn('Errore ridimensionamento mappa:', e);
                 }
-            }
-        }, 150);
+            }, 100);
+        }
     }
 }
 
@@ -5305,32 +5315,7 @@ console.log("  - 📊 Dashboard personalizzata per ruolo");
 console.log("  - 🗺️ Mappa OpenStreetMap per punti di interesse");
 console.log("🎉 APPLICAZIONE COMPLETA CON GESTIONE UTENTI!");
 
-// Inizializza mappa quando il DOM è pronto
-setTimeout(() => {
-    if (document.getElementById('map')) {
-        try {
-            initMap();
-            console.log('🗺️ Mappa inizializzata');
-            
-            // Ridimensionamenti aggiuntivi per assicurare il corretto rendering
-            setTimeout(() => {
-                if (map) {
-                    map.invalidateSize();
-                    console.log('🗺️ Primo ridimensionamento post-init');
-                }
-            }, 500);
-            
-            setTimeout(() => {
-                if (map) {
-                    map.invalidateSize();
-                    console.log('🗺️ Secondo ridimensionamento post-init');
-                }
-            }, 1500);
-        } catch(e) {
-            console.warn('Errore inizializzazione mappa:', e);
-        }
-    }
-}, 1200);
+// La mappa verrà inizializzata lazy quando si accede alla sezione giornali
 
 </script>
 
