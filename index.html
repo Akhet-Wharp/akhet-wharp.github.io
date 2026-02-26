@@ -137,6 +137,27 @@ textarea{min-height:120px;font-family:inherit;overflow:hidden;resize:none}
 .gps-button:active {
     background: #e0e0e0;
 }
+.gps-btn-inline:hover {
+    background: #f0f0f0 !important;
+    transform: scale(1.05);
+}
+.gps-btn-inline:active {
+    background: #e0e0e0 !important;
+}
+.gps-btn-inline.loading {
+    opacity: 0.6;
+    cursor: wait;
+}
+.gps-btn-inline.success {
+    background: #27ae60 !important;
+    color: white;
+    border-color: #27ae60 !important;
+}
+.gps-btn-inline.error {
+    background: #e74c3c !important;
+    color: white;
+    border-color: #e74c3c !important;
+}
 .gps-button.loading {
     opacity: 0.6;
     cursor: wait;
@@ -391,12 +412,10 @@ Esporta report mensile in PDF o tutti i punti mappa in GeoJSON per un cantiere
 </div>
 <div style="position:relative">
 <div id="map" style="height:400px;border:2px solid #ddd;border-radius:8px;margin-bottom:10px"></div>
-<button type="button" class="gps-button" onclick="geolocateMe()" title="Usa la mia posizione GPS">
-📍
-</button>
-<button type="button" onclick="fixMap()" title="Ricarica mappa se grigia" style="position:absolute;top:10px;left:60px;z-index:1000;background:white;border:2px solid #ddd;border-radius:5px;padding:8px 12px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:14px">
-🔄 Ricarica mappa
-</button>
+<div style="position:absolute;top:10px;right:10px;z-index:1000;display:flex;flex-direction:column;gap:6px">
+    <button type="button" onclick="geolocateMe()" title="Usa la mia posizione GPS" style="background:white;border:2px solid rgba(0,0,0,0.2);border-radius:5px;padding:8px 12px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:20px;transition:all 0.3s" class="gps-btn-inline" id="gpsMainBtn">📍</button>
+    <button type="button" onclick="fixMap()" title="Ricarica mappa se grigia" style="background:white;border:2px solid #ddd;border-radius:5px;padding:8px 10px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:13px;white-space:nowrap">🔄 Ricarica</button>
+</div>
 </div>
 <p style="font-size:12px;color:#666;margin:0">
 ℹ️ Clicca sulla mappa per posizionare il punto o usa il pulsante GPS 📍 per la tua posizione attuale. Se la mappa è grigia, clicca "🔄 Ricarica mappa".
@@ -754,9 +773,10 @@ Esporta report mensile in PDF o tutti i punti mappa in GeoJSON per un cantiere
 </div>
 <div style="position:relative">
 <div id="editMap" style="height:400px;border:2px solid #ddd;border-radius:8px;margin-bottom:10px"></div>
-<button type="button" class="gps-button" onclick="geolocateEditMap()" title="Usa la mia posizione GPS">
-📍
-</button>
+<div style="position:absolute;top:10px;right:10px;z-index:1000;display:flex;flex-direction:column;gap:6px">
+    <button type="button" onclick="geolocateEditMap()" title="Usa la mia posizione GPS" style="background:white;border:2px solid rgba(0,0,0,0.2);border-radius:5px;padding:8px 12px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:20px;transition:all 0.3s" class="gps-btn-inline" id="gpsEditBtn">📍</button>
+    <button type="button" onclick="if(editMap){editMap.invalidateSize();}" title="Ricarica mappa se grigia" style="background:white;border:2px solid #ddd;border-radius:5px;padding:8px 10px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.3);font-size:13px;white-space:nowrap">🔄 Ricarica</button>
+</div>
 </div>
 <p style="font-size:12px;color:#666;margin:0">
 ℹ️ Clicca sulla mappa per posizionare/modificare il punto o usa il pulsante GPS 📍 per la tua posizione attuale.
@@ -978,6 +998,7 @@ let lastActiveTab = 'giornali'; // Traccia l'ultimo tab attivo per resettare i f
 
 // Cache foto
 let fotoCache = {};
+let fotoCacheNomi = {}; // { giornaleId: [{url, name}] } - usato per gestione modifica foto
 
 // Gestione modali
 let editingCantiereId = null;
@@ -1980,9 +2001,89 @@ function addOp() {
 }
 
 // Gestione foto
+// ---- FOTO PICKER (fotocamera / galleria) ----
+let _fotoPickerTarget = null;   // { type: 'new'|'edit', n: 1|2|3 }
+
 function pickFoto(n) {
-    document.getElementById('f' + n).click();
+    // Su mobile mostra il bottom sheet, su desktop apre direttamente galleria
+    if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        _fotoPickerTarget = { type: 'new', n: n };
+        document.getElementById('fotoPickerOverlay').classList.add('active');
+    } else {
+        document.getElementById('f' + n).click();
+    }
 }
+
+function openEditFotoPicker() {
+    // Chiamato dal bottone "Aggiungi Foto" nel modal modifica
+    if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        _fotoPickerTarget = { type: 'edit' };
+        document.getElementById('fotoPickerOverlay').classList.add('active');
+    } else {
+        _addEditFotoFromInput(document.getElementById('fEditGal'));
+    }
+}
+
+function closeFotoPicker() {
+    document.getElementById('fotoPickerOverlay').classList.remove('active');
+    _fotoPickerTarget = null;
+}
+
+function triggerFotoPicker(source) {
+    closeFotoPicker();
+    if (!_fotoPickerTarget) return;
+
+    if (_fotoPickerTarget.type === 'new') {
+        const n = _fotoPickerTarget.n;
+        const inputId = source === 'camera' ? 'fCam' + n : 'fGal' + n;
+        const input = document.getElementById(inputId);
+        input.value = '';
+        input.onchange = () => {
+            // Copia il file nell'input originale e scatena handleFoto
+            const file = input.files[0];
+            if (!file) return;
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            document.getElementById('f' + n).files = dt.files;
+            handleFoto(n);
+        };
+        input.click();
+    } else {
+        // Modal modifica
+        const inputId = source === 'camera' ? 'fEditCam' : 'fEditGal';
+        _addEditFotoFromInput(document.getElementById(inputId));
+    }
+}
+
+function _addEditFotoFromInput(input) {
+    if (editFotoList.length >= 3) {
+        alert('⚠️ Massimo 3 foto per giornale!');
+        return;
+    }
+    input.value = '';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const compressed = await compImg(file);
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                editFotoList.push({
+                    file: compressed,
+                    preview: ev.target.result,
+                    isNew: true
+                });
+                renderEditFoto();
+            };
+            reader.readAsDataURL(compressed);
+        } catch (e) {
+            console.error('Errore compressione:', e);
+            alert('❌ Errore nel caricamento della foto');
+        }
+    };
+    input.click();
+}
+// ---- fine FOTO PICKER ----
 
 document.getElementById('f1').onchange = () => handleFoto(1);
 document.getElementById('f2').onchange = () => handleFoto(2);
@@ -2228,8 +2329,7 @@ function resetMap() {
 // Funzione di geolocalizzazione per la mappa principale
 function geolocateMe() {
     // Trova il pulsante GPS
-    const gpsButtons = document.querySelectorAll('.gps-button');
-    const gpsButton = gpsButtons[0]; // Primo pulsante (mappa creazione)
+    const gpsButton = document.getElementById('gpsMainBtn');
     
     if (!navigator.geolocation) {
         alert('⚠️ La geolocalizzazione non è supportata dal tuo browser');
@@ -2401,8 +2501,7 @@ function setEditMapPoint(puntoData) {
 // Funzione di geolocalizzazione per la mappa di modifica
 function geolocateEditMap() {
     // Trova il pulsante GPS della mappa di modifica
-    const gpsButtons = document.querySelectorAll('.gps-button');
-    const gpsButton = gpsButtons[1]; // Secondo pulsante (mappa modifica)
+    const gpsButton = document.getElementById('gpsEditBtn');
     
     if (!navigator.geolocation) {
         alert('⚠️ La geolocalizzazione non è supportata dal tuo browser');
@@ -3092,17 +3191,15 @@ async function loadAllFoto() {
         
         // Raggruppa foto per giornale
         giornaliData.forEach(g => {
-            // Carica tutte le foto che iniziano con giornale_${id}_ indipendentemente dal pattern
-            const gFoto = files.value
+            const gFotoFiles = files.value
                 .filter(f => {
-                    // Pattern: giornale_123_foto_1.jpg OPPURE giornale_123_foto_1234567890.jpg
                     const prefix = `giornale_${g.id}_`;
                     return f.name.startsWith(prefix) && f.name.includes('foto');
-                })
-                .map(f => f['@microsoft.graph.downloadUrl']);
+                });
             
-            if (gFoto.length > 0) {
-                fotoCache[g.id] = gFoto;
+            if (gFotoFiles.length > 0) {
+                fotoCache[g.id] = gFotoFiles.map(f => f['@microsoft.graph.downloadUrl']);
+                fotoCacheNomi[g.id] = gFotoFiles.map(f => ({ url: f['@microsoft.graph.downloadUrl'], name: f.name }));
             }
         });
         
@@ -4405,14 +4502,23 @@ async function editGiornale(id) {
 // Carica foto esistenti per il giornale
 async function loadEditFoto(giornaleId) {
     try {
+        const fotoNomi = fotoCacheNomi[giornaleId] || [];
         const foto = fotoCache[giornaleId] || [];
         console.log(`📸 Caricamento ${foto.length} foto esistenti per giornale ${giornaleId}`);
         
-        // Popola array con foto esistenti (isNew: false)
-        editFotoList = foto.map(url => ({
-            url: url,
-            isNew: false
-        }));
+        if (fotoNomi.length > 0) {
+            editFotoList = fotoNomi.map(f => ({
+                url: f.url,
+                name: f.name,
+                isNew: false
+            }));
+        } else {
+            editFotoList = foto.map(url => ({
+                url: url,
+                name: null,
+                isNew: false
+            }));
+        }
         
     } catch (e) {
         console.error('Errore caricamento foto:', e);
@@ -4425,7 +4531,7 @@ function renderEditFoto() {
     const container = document.getElementById('editFotoContainer');
     const totaleFoto = editFotoList.length;
     
-    let html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-top:10px">';
+    let html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px">';
     
     editFotoList.forEach((foto, idx) => {
         const imgSrc = foto.isNew ? foto.preview : foto.url;
@@ -4434,8 +4540,8 @@ function renderEditFoto() {
         
         html += `
             <div style="text-align:center">
-                <div style="${borderStyle};border-radius:8px;padding:10px;min-height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center">
-                    <img src="${imgSrc}" style="max-width:100%;max-height:120px;border-radius:5px;cursor:pointer;margin-bottom:10px" onclick="openLightbox('${imgSrc}')">
+                <div style="${borderStyle};border-radius:8px;padding:6px;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center">
+                    <img src="${imgSrc}" style="max-width:100%;max-height:100px;border-radius:5px;cursor:pointer;margin-bottom:6px" onclick="openLightbox('${imgSrc}')">
                     ${label}
                     <button type="button" class="btn btn-danger small-btn" onclick="removeFoto(${idx})">🗑️ Elimina</button>
                 </div>
@@ -4467,40 +4573,7 @@ function renderEditFoto() {
 
 // Aggiungi nuova foto nel modal edit
 function addEditFoto() {
-    if (editFotoList.length >= 3) {
-        alert('⚠️ Massimo 3 foto per giornale!');
-        return;
-    }
-    
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        
-        try {
-            const compressed = await compImg(file);
-            
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                editFotoList.push({
-                    file: compressed,
-                    preview: e.target.result,
-                    isNew: true
-                });
-                renderEditFoto();
-            };
-            reader.readAsDataURL(compressed);
-            
-        } catch (e) {
-            console.error('Errore compressione:', e);
-            alert('❌ Errore nel caricamento della foto');
-        }
-    };
-    
-    input.click();
+    openEditFotoPicker();
 }
 
 // Rimuovi foto dall'array (sia esistenti che nuove)
@@ -4538,9 +4611,9 @@ function renderEditArch() {
                     <option value="">Seleziona...</option>
                     ${opts}
                 </select>
-                <input type="number" placeholder="Ore" value="${a.ore || 8}" min="0" step="0.5"
+                <input type="number" placeholder="h" value="${a.ore || 8}" min="0" max="99" step="0.5"
                        onchange="editArcheologi[${idx}].ore = parseFloat(this.value)" 
-                       style="flex:1">
+                       style="width:56px;min-width:56px;padding:8px 4px;text-align:center">
                 <button type="button" class="btn btn-danger small-btn" onclick="rmEditArch(${idx})">🗑️</button>
             </div>
         `;
@@ -4602,9 +4675,9 @@ function renderEditOp() {
                 <input type="text" placeholder="Nome Cognome" value="${o.nome || ''}" 
                        onchange="editOperai[${idx}].nome = this.value" 
                        style="flex:2">
-                <input type="number" placeholder="Ore" value="${o.ore || 8}" min="0" step="0.5"
+                <input type="number" placeholder="h" value="${o.ore || 8}" min="0" max="99" step="0.5"
                        onchange="editOperai[${idx}].ore = parseFloat(this.value)" 
-                       style="flex:1">
+                       style="width:56px;min-width:56px;padding:8px 4px;text-align:center">
                 <button type="button" class="btn btn-danger small-btn" onclick="rmEditOp(${idx})">🗑️</button>
             </div>
         `;
@@ -4739,23 +4812,35 @@ async function saveEditGiornale() {
         
         console.log(`✏️ Giornale ${editingGiornaleId} modificato`);
         
-        // 2. Gestione foto SEMPLIFICATA: elimina TUTTE le vecchie, carica SOLO quelle nell'array
+        // 2. Gestione foto INTELLIGENTE: elimina solo le foto rimosse, carica solo le nuove
         const driveId = await getDriveId();
         const folderId = await getFotoFolderId(driveId);
         
-        // 2a. Elimina TUTTE le vecchie foto del giornale
-        btnSave.textContent = '⏳ Eliminazione foto vecchie...';
+        // 2a. Recupera tutti i file attuali del giornale dal drive
+        const prefix = `giornale_${editingGiornaleId}_`;
+        let fileSulDrive = [];
         try {
             const searchResponse = await fetch(
                 `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}/children`,
                 { headers: { 'Authorization': `Bearer ${accessToken}` } }
             );
             const searchData = await searchResponse.json();
-            const prefix = `giornale_${editingGiornaleId}_`;
-            
-            // Trova ed elimina TUTTI i file di questo giornale
-            const vecchieFoto = searchData.value.filter(f => f.name.startsWith(prefix));
-            for (const file of vecchieFoto) {
+            fileSulDrive = (searchData.value || []).filter(f => f.name.startsWith(prefix) && f.name.includes('foto'));
+        } catch (e) {
+            console.warn('Errore recupero file dal drive:', e);
+        }
+        
+        // 2b. Nomi da mantenere (foto esistenti che l'utente NON ha rimosso)
+        const nomiDaMantenere = new Set(
+            editFotoList
+                .filter(f => !f.isNew && f.name)
+                .map(f => f.name)
+        );
+        
+        // 2c. Elimina SOLO i file non più presenti in editFotoList
+        btnSave.textContent = '⏳ Eliminazione foto rimosse...';
+        for (const file of fileSulDrive) {
+            if (!nomiDaMantenere.has(file.name)) {
                 try {
                     await fetch(
                         `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${file.id}`,
@@ -4769,18 +4854,17 @@ async function saveEditGiornale() {
                     console.error(`Errore eliminazione ${file.name}:`, e);
                 }
             }
-        } catch (e) {
-            console.warn('Errore eliminazione foto vecchie:', e);
         }
         
-        // 2b. Carica SOLO le foto nuove (quelle con isNew: true)
+        // 2d. Carica le foto nuove con timestamp per evitare collisioni
         const fotoNuoveDaCaricare = editFotoList.filter(f => f.isNew && f.file);
         if (fotoNuoveDaCaricare.length > 0) {
             btnSave.textContent = '⏳ Upload nuove foto...';
+            const ts = Date.now();
             
             for (let i = 0; i < fotoNuoveDaCaricare.length; i++) {
                 const fotoObj = fotoNuoveDaCaricare[i];
-                const filename = `giornale_${editingGiornaleId}_foto_${i + 1}.jpg`;
+                const filename = `giornale_${editingGiornaleId}_foto_${ts}_${i + 1}.jpg`;
                 
                 try {
                     const uploadResponse = await fetch(
@@ -6166,6 +6250,47 @@ msalInstance.handleRedirectPromise()
     });
 
 </script>
+
+
+<!-- BOTTOM SHEET SCELTA FOTO -->
+<div id="fotoPickerOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:flex-end;justify-content:center" onclick="closeFotoPicker()">
+    <div style="background:#fff;border-radius:20px 20px 0 0;padding:20px;width:100%;max-width:500px;animation:slideUp 0.2s ease" onclick="event.stopPropagation()">
+        <div style="width:40px;height:4px;background:#ddd;border-radius:2px;margin:0 auto 20px"></div>
+        <p style="text-align:center;font-weight:600;color:#333;margin-bottom:20px;font-size:16px">📸 Aggiungi foto</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+            <button type="button" onclick="triggerFotoPicker('camera')" style="padding:20px 10px;border:2px solid #e0e0e0;border-radius:12px;background:#f8f9fa;cursor:pointer;font-size:14px;font-weight:600;color:#333;display:flex;flex-direction:column;align-items:center;gap:8px">
+                <span style="font-size:32px">📷</span>
+                Fotocamera
+            </button>
+            <button type="button" onclick="triggerFotoPicker('gallery')" style="padding:20px 10px;border:2px solid #e0e0e0;border-radius:12px;background:#f8f9fa;cursor:pointer;font-size:14px;font-weight:600;color:#333;display:flex;flex-direction:column;align-items:center;gap:8px">
+                <span style="font-size:32px">🖼️</span>
+                Galleria
+            </button>
+        </div>
+        <button type="button" onclick="closeFotoPicker()" style="width:100%;padding:14px;border:none;border-radius:10px;background:#f0f0f0;color:#666;font-size:15px;cursor:pointer;font-weight:500">Annulla</button>
+    </div>
+</div>
+
+<!-- Input nascosti per fotocamera e galleria (form nuovo giornale) -->
+<input type="file" id="fCam1" accept="image/*" capture="environment" style="display:none">
+<input type="file" id="fGal1" accept="image/*" style="display:none">
+<input type="file" id="fCam2" accept="image/*" capture="environment" style="display:none">
+<input type="file" id="fGal2" accept="image/*" style="display:none">
+<input type="file" id="fCam3" accept="image/*" capture="environment" style="display:none">
+<input type="file" id="fGal3" accept="image/*" style="display:none">
+
+<!-- Input nascosti per fotocamera e galleria (modal modifica) -->
+<input type="file" id="fEditCam" accept="image/*" capture="environment" style="display:none">
+<input type="file" id="fEditGal" accept="image/*" style="display:none">
+
+<style>
+@keyframes slideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+}
+#fotoPickerOverlay { display: none !important; }
+#fotoPickerOverlay.active { display: flex !important; }
+</style>
 
 </body>
 </html>
