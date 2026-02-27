@@ -2004,9 +2004,12 @@ function addOp() {
 // ---- FOTO PICKER (fotocamera / galleria) ----
 let _fotoPickerTarget = null;   // { type: 'new'|'edit', n: 1|2|3 }
 
+function isMobile() {
+    return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 function pickFoto(n) {
-    // Su mobile mostra il bottom sheet, su desktop apre direttamente galleria
-    if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    if (isMobile()) {
         _fotoPickerTarget = { type: 'new', n: n };
         document.getElementById('fotoPickerOverlay').classList.add('active');
     } else {
@@ -2015,73 +2018,108 @@ function pickFoto(n) {
 }
 
 function openEditFotoPicker() {
-    // Chiamato dal bottone "Aggiungi Foto" nel modal modifica
-    if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    if (isMobile()) {
         _fotoPickerTarget = { type: 'edit' };
         document.getElementById('fotoPickerOverlay').classList.add('active');
     } else {
-        _addEditFotoFromInput(document.getElementById('fEditGal'));
+        _triggerInput(document.getElementById('fEditGal'), 'edit');
     }
 }
 
 function closeFotoPicker() {
     document.getElementById('fotoPickerOverlay').classList.remove('active');
-    _fotoPickerTarget = null;
+    _fotoPickerTarget = null; // Annulla: resetta il target
 }
 
+// Chiamato DIRETTAMENTE dal tap sui bottoni Fotocamera / Galleria nel bottom sheet
+// È fondamentale che input.click() sia nella stessa call stack del tap utente
 function triggerFotoPicker(source) {
-    closeFotoPicker();
-    if (!_fotoPickerTarget) return;
+    // Chiudi l'overlay visivamente
+    document.getElementById('fotoPickerOverlay').classList.remove('active');
 
-    if (_fotoPickerTarget.type === 'new') {
-        const n = _fotoPickerTarget.n;
-        const inputId = source === 'camera' ? 'fCam' + n : 'fGal' + n;
-        const input = document.getElementById(inputId);
-        input.value = '';
+    const target = _fotoPickerTarget;
+    _fotoPickerTarget = null;
+    if (!target) return;
+
+    if (target.type === 'new') {
+        const n = target.n;
+        const input = document.getElementById(source === 'camera' ? 'fCam' + n : 'fGal' + n);
+        _triggerInput(input, 'new', n);
+    } else {
+        if (editFotoList.length >= 3) {
+            alert('⚠️ Massimo 3 foto per giornale!');
+            return;
+        }
+        const input = document.getElementById(source === 'camera' ? 'fEditCam' : 'fEditGal');
+        _triggerInput(input, 'edit');
+    }
+}
+
+function _triggerInput(input, mode, n) {
+    input.value = '';
+
+    if (mode === 'new') {
         input.onchange = () => {
-            // Copia il file nell'input originale e scatena handleFoto
             const file = input.files[0];
             if (!file) return;
-            const dt = new DataTransfer();
-            dt.items.add(file);
-            document.getElementById('f' + n).files = dt.files;
+            // Copia il file nell'input originale e scatena handleFoto
+            try {
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                document.getElementById('f' + n).files = dt.files;
+            } catch(e) {
+                // DataTransfer non supportato (raro) — gestisce handleFoto direttamente
+                _processNewFoto(file, n);
+                return;
+            }
             handleFoto(n);
         };
-        input.click();
     } else {
-        // Modal modifica
-        const inputId = source === 'camera' ? 'fEditCam' : 'fEditGal';
-        _addEditFotoFromInput(document.getElementById(inputId));
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            try {
+                const compressed = await compImg(file);
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    editFotoList.push({
+                        file: compressed,
+                        preview: ev.target.result,
+                        isNew: true
+                    });
+                    renderEditFoto();
+                };
+                reader.readAsDataURL(compressed);
+            } catch (err) {
+                console.error('Errore compressione:', err);
+                alert('❌ Errore nel caricamento della foto');
+            }
+        };
     }
+
+    // click() deve essere chiamato DIRETTAMENTE nell'handler del tap — non in setTimeout
+    input.click();
 }
 
-function _addEditFotoFromInput(input) {
-    if (editFotoList.length >= 3) {
-        alert('⚠️ Massimo 3 foto per giornale!');
-        return;
+// Fallback per browser che non supportano DataTransfer
+async function _processNewFoto(file, n) {
+    const btn = document.getElementById('bf' + n);
+    btn.textContent = '⏳ Caricamento...';
+    btn.disabled = true;
+    try {
+        const blob = await compImg(file);
+        foto[n - 1] = blob;
+        const url = URL.createObjectURL(blob);
+        document.getElementById('im' + n).src = url;
+        document.getElementById('prev' + n).style.display = 'block';
+        btn.textContent = '✏️ Cambia';
+        btn.disabled = false;
+        document.getElementById('br' + n).style.display = 'inline-block';
+    } catch(e) {
+        btn.textContent = '📷 Foto ' + n;
+        btn.disabled = false;
+        alert('Errore caricamento foto');
     }
-    input.value = '';
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        try {
-            const compressed = await compImg(file);
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                editFotoList.push({
-                    file: compressed,
-                    preview: ev.target.result,
-                    isNew: true
-                });
-                renderEditFoto();
-            };
-            reader.readAsDataURL(compressed);
-        } catch (e) {
-            console.error('Errore compressione:', e);
-            alert('❌ Errore nel caricamento della foto');
-        }
-    };
-    input.click();
 }
 // ---- fine FOTO PICKER ----
 
