@@ -181,6 +181,21 @@ textarea{min-height:120px;font-family:inherit;overflow:hidden;resize:none}
     .giornali-grid{grid-template-columns:1fr !important}
 }
 
+/* Footer powered by */
+.powered-by-footer {
+    text-align: center;
+    padding: 12px 0 4px 0;
+    margin-top: 30px;
+    border-top: 1px solid #e0d8c8;
+    font-size: 11px;
+    color: #9a8f7a;
+    letter-spacing: 0.5px;
+}
+.powered-by-footer span {
+    font-weight: 700;
+    color: #b8423a;
+}
+
 </style>
 </head>
 <body>
@@ -461,6 +476,9 @@ Esporta report mensile in PDF o tutti i punti mappa in GeoJSON per un cantiere
 <div class="loading">Caricamento utenti</div>
 </div>
 </div>
+
+<!-- FOOTER POWERED BY -->
+<div class="powered-by-footer">Powered by <span>WHARP srl SB</span></div>
 
 </div>
 
@@ -3740,45 +3758,53 @@ async function exportPDF(id) {
             y += 5;
             
             const fotoWidth = (contentWidth - 10) / 3;
-            const maxFotoHeight = 50; // Altezza massima per foto verticali
+            const maxAllowedHeight = 50;
+            let maxFotoRowHeight = 0;
             
+            // Prima passata: calcola dimensioni finali rispettando proporzioni
+            const fotoImgs = [];
+            const fotoHeights = [];
             for (let i = 0; i < Math.min(foto.length, 3); i++) {
                 try {
                     const img = await loadImageAsBase64(foto[i]);
-                    const x = margin + (i * (fotoWidth + 5));
-                    
-                    // Calcola proporzioni immagine
                     const imgElement = new Image();
                     imgElement.src = img;
-                    await new Promise(resolve => { imgElement.onload = resolve; });
-                    
-                    const aspectRatio = imgElement.width / imgElement.height;
-                    let finalWidth = fotoWidth - 2;
-                    let finalHeight = finalWidth / aspectRatio;
-                    
-                    // Se foto verticale (altezza > larghezza), limita altezza
-                    if (finalHeight > maxFotoHeight) {
-                        finalHeight = maxFotoHeight;
-                        finalWidth = finalHeight * aspectRatio;
+                    await new Promise(resolve => { imgElement.onload = resolve; imgElement.onerror = resolve; });
+                    const aspectRatio = imgElement.width / imgElement.height || 1;
+                    // Parto dalla larghezza piena del riquadro
+                    let drawW = fotoWidth - 2;
+                    let drawH = drawW / aspectRatio;
+                    // Se supera l'altezza massima, scalo mantenendo le proporzioni
+                    if (drawH > maxAllowedHeight) {
+                        drawH = maxAllowedHeight;
+                        drawW = drawH * aspectRatio;
                     }
-                    
-                    const fotoBoxHeight = Math.max(35, finalHeight + 2);
-                    doc.rect(x, y, fotoWidth, fotoBoxHeight);
-                    
-                    // Centra immagine nel box
-                    const offsetX = (fotoWidth - finalWidth) / 2;
-                    const offsetY = (fotoBoxHeight - finalHeight) / 2;
-                    
-                    doc.addImage(img, 'JPEG', x + offsetX, y + offsetY, finalWidth, finalHeight);
+                    fotoImgs.push(img);
+                    fotoHeights.push({ drawW, drawH });
+                    if (drawH > maxFotoRowHeight) maxFotoRowHeight = drawH;
                 } catch (e) {
                     console.warn(`Impossibile caricare foto ${i + 1}:`, e);
-                    doc.rect(margin + (i * (fotoWidth + 5)), y, fotoWidth, 35);
+                    fotoImgs.push(null);
+                    fotoHeights.push({ drawW: fotoWidth - 2, drawH: 33 });
+                    if (33 > maxFotoRowHeight) maxFotoRowHeight = 33;
                 }
             }
             
-            // Usa l'altezza massima tra le foto
-            const maxUsedHeight = 50;
-            y += maxUsedHeight + 8;
+            const fotoBoxHeight = maxFotoRowHeight + 2;
+            
+            // Seconda passata: disegna riquadro uguale per tutti, immagine centrata
+            for (let i = 0; i < fotoImgs.length; i++) {
+                const x = margin + (i * (fotoWidth + 5));
+                doc.rect(x, y, fotoWidth, fotoBoxHeight);
+                if (fotoImgs[i]) {
+                    const { drawW, drawH } = fotoHeights[i];
+                    const offsetX = (fotoWidth - drawW) / 2;
+                    const offsetY = (fotoBoxHeight - drawH) / 2;
+                    doc.addImage(fotoImgs[i], 'JPEG', x + offsetX, y + offsetY, drawW, drawH);
+                }
+            }
+            
+            y += fotoBoxHeight + 8;
         }
         
         // === FIRME IN FONDO ===
@@ -3843,6 +3869,13 @@ async function exportPDF(id) {
         doc.text(String(g.responsabileEnte || ''), margin + 2, y + 7);
         doc.text(String(g.archeologoSulCampo || ''), margin + firmeColWidth + 2, y + 7);
         doc.text(String(g.responsabileAkhet || ''), margin + firmeColWidth * 2 + 2, y + 7);
+        
+        // Powered by WHARP
+        doc.setFont(undefined, 'italic');
+        doc.setFontSize(6);
+        doc.setTextColor(150, 150, 150);
+        doc.text('Powered by WHARP srl SB', pageWidth - margin, 290, { align: 'right' });
+        doc.setTextColor(0, 0, 0);
         
         // Salva PDF
         const codiceSitoPDF  = (cant?.codiceSito  || 'X').replace(/[^a-z0-9]/gi, '_');
@@ -4239,20 +4272,52 @@ async function creaGiornalePDF(doc, g, cantiere, numero, totale, nomeMese) {
         y += 5;
         
         const fotoWidth = (contentWidth - 10) / 3;
-        const fotoHeight = 35;
+        const maxAllowedHeight = 50; // Altezza massima riga per stare su una pagina
+        let maxFotoRowHeight = 0;
         
+        // Prima passata: calcola dimensioni finali rispettando proporzioni
+        const fotoImgs = [];
+        const fotoHeights = [];
         for (let i = 0; i < Math.min(foto.length, 3); i++) {
             try {
                 const img = await loadImageAsBase64(foto[i]);
-                const x = margin + (i * (fotoWidth + 5));
-                doc.rect(x, y, fotoWidth, fotoHeight);
-                doc.addImage(img, 'JPEG', x + 1, y + 1, fotoWidth - 2, fotoHeight - 2);
+                const imgElement = new Image();
+                imgElement.src = img;
+                await new Promise(resolve => { imgElement.onload = resolve; imgElement.onerror = resolve; });
+                const aspectRatio = imgElement.width / imgElement.height || 1;
+                // Parto dalla larghezza piena del riquadro
+                let drawW = fotoWidth - 2;
+                let drawH = drawW / aspectRatio;
+                // Se supera l'altezza massima, scalo mantenendo le proporzioni
+                if (drawH > maxAllowedHeight) {
+                    drawH = maxAllowedHeight;
+                    drawW = drawH * aspectRatio;
+                }
+                fotoImgs.push(img);
+                fotoHeights.push({ drawW, drawH });
+                if (drawH > maxFotoRowHeight) maxFotoRowHeight = drawH;
             } catch (e) {
                 console.warn(`Impossibile caricare foto ${i + 1}:`, e);
-                doc.rect(margin + (i * (fotoWidth + 5)), y, fotoWidth, fotoHeight);
+                fotoImgs.push(null);
+                fotoHeights.push({ drawW: fotoWidth - 2, drawH: 33 });
+                if (33 > maxFotoRowHeight) maxFotoRowHeight = 33;
             }
         }
-        y += fotoHeight + 8;
+        
+        const boxHeight = maxFotoRowHeight + 2;
+        
+        // Seconda passata: disegna riquadro uguale per tutti, immagine centrata
+        for (let i = 0; i < fotoImgs.length; i++) {
+            const x = margin + (i * (fotoWidth + 5));
+            doc.rect(x, y, fotoWidth, boxHeight);
+            if (fotoImgs[i]) {
+                const { drawW, drawH } = fotoHeights[i];
+                const offsetX = (fotoWidth - drawW) / 2;
+                const offsetY = (boxHeight - drawH) / 2;
+                doc.addImage(fotoImgs[i], 'JPEG', x + offsetX, y + offsetY, drawW, drawH);
+            }
+        }
+        y += boxHeight + 8;
     }
     
     // === PUNTO DI INTERESSE ===
@@ -4320,6 +4385,12 @@ async function creaGiornalePDF(doc, g, cantiere, numero, totale, nomeMese) {
     doc.text(String(g.responsabileEnte || ''), margin + 2, y + 7);
     doc.text(String(g.archeologoSulCampo || ''), margin + firmeColWidth + 2, y + 7);
     doc.text(String(g.responsabileAkhet || ''), margin + firmeColWidth * 2 + 2, y + 7);
+    
+    // Powered by WHARP
+    doc.setFont(undefined, 'italic');
+    doc.setFontSize(6);
+    doc.setTextColor(150, 150, 150);
+    doc.text('Powered by WHARP srl SB', pageWidth - margin, 290, { align: 'right' });
     
     doc.setTextColor(0, 0, 0);
 }
@@ -4898,7 +4969,7 @@ async function saveEditGiornale() {
         
         console.log(`✏️ Giornale ${editingGiornaleId} modificato`);
         
-        // 2. Gestione foto INTELLIGENTE: elimina solo le foto rimosse, carica solo le nuove
+        // 2. Gestione foto: elimina le rimosse, carica le nuove
         const driveId = await getDriveId();
         const folderId = await getFotoFolderId(driveId);
         
@@ -4916,24 +4987,33 @@ async function saveEditGiornale() {
             console.warn('Errore recupero file dal drive:', e);
         }
         
-        // 2b. Nomi da mantenere (foto esistenti che l'utente NON ha rimosso)
+        // 2b. Nomi da mantenere: foto esistenti NON rimosse dall'utente
+        // Usa il nome se disponibile, altrimenti ricava il nome dall'URL
         const nomiDaMantenere = new Set(
             editFotoList
-                .filter(f => !f.isNew && f.name)
-                .map(f => f.name)
+                .filter(f => !f.isNew)
+                .map(f => {
+                    if (f.name) return f.name;
+                    // Ricava il nome dal URL (ultimo segmento prima dei parametri query)
+                    if (f.url) {
+                        try {
+                            const urlPath = new URL(f.url).pathname;
+                            return decodeURIComponent(urlPath.split('/').pop());
+                        } catch { return null; }
+                    }
+                    return null;
+                })
+                .filter(Boolean)
         );
         
-        // 2c. Elimina SOLO i file non più presenti in editFotoList
+        // 2c. Elimina SOLO i file non più presenti
         btnSave.textContent = '⏳ Eliminazione foto rimosse...';
         for (const file of fileSulDrive) {
             if (!nomiDaMantenere.has(file.name)) {
                 try {
                     await fetch(
                         `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${file.id}`,
-                        {
-                            method: 'DELETE',
-                            headers: { 'Authorization': `Bearer ${accessToken}` }
-                        }
+                        { method: 'DELETE', headers: { 'Authorization': `Bearer ${accessToken}` } }
                     );
                     console.log(`🗑️ Foto eliminata: ${file.name}`);
                 } catch (e) {
@@ -4942,8 +5022,11 @@ async function saveEditGiornale() {
             }
         }
         
-        // 2d. Carica le foto nuove con timestamp per evitare collisioni
+        // 2d. Carica le foto nuove e aggiorna la cache localmente con gli URL restituiti
         const fotoNuoveDaCaricare = editFotoList.filter(f => f.isNew && f.file);
+        const nuoveUrlsPerCache = [];
+        const nuoviNomiPerCache = [];
+        
         if (fotoNuoveDaCaricare.length > 0) {
             btnSave.textContent = '⏳ Upload nuove foto...';
             const ts = Date.now();
@@ -4966,6 +5049,10 @@ async function saveEditGiornale() {
                     );
                     
                     if (uploadResponse.ok) {
+                        const uploadedItem = await uploadResponse.json();
+                        const downloadUrl = uploadedItem['@microsoft.graph.downloadUrl'] || fotoObj.preview;
+                        nuoveUrlsPerCache.push(downloadUrl);
+                        nuoviNomiPerCache.push({ url: downloadUrl, name: filename });
                         console.log(`📸 Foto caricata: ${filename}`);
                     } else {
                         console.error(`❌ Errore upload ${filename}: ${uploadResponse.status}`);
@@ -4975,6 +5062,12 @@ async function saveEditGiornale() {
                 }
             }
         }
+        
+        // 2e. Aggiorna la cache localmente senza aspettare SharePoint
+        const fotoMantenuteUrls = editFotoList.filter(f => !f.isNew).map(f => f.url);
+        const fotoMantenuteNomi = editFotoList.filter(f => !f.isNew && f.name).map(f => ({ url: f.url, name: f.name }));
+        fotoCache[editingGiornaleId] = [...fotoMantenuteUrls, ...nuoveUrlsPerCache];
+        fotoCacheNomi[editingGiornaleId] = [...fotoMantenuteNomi, ...nuoviNomiPerCache];
         
         // 3. Aggiorna dati locali
         const g = giornaliData.find(x => x.id == editingGiornaleId);
@@ -5006,12 +5099,7 @@ async function saveEditGiornale() {
             filtG.lavori = lavori;
         }
         
-        // 4. Ricarica le foto per aggiornare la cache (con delay per SharePoint)
-        btnSave.textContent = '⏳ Aggiornamento...';
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Delay per indicizzazione SharePoint
-        await loadAllFoto();
-        
-        // 5. Sincronizza presenze (elimina vecchie + ricrea)
+        // 4. Sincronizza presenze (elimina vecchie + ricrea)
         btnSave.textContent = '🔄 Sync presenze...';
         await deletePresenzeByGiornale(editingGiornaleId);
         await syncToPresenze(editingGiornaleId, data, cantiereSelezionato, archeologiFiltrati, operaiFiltrati);
