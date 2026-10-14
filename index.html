@@ -1162,6 +1162,10 @@ let cantiereLookupFieldName = null; // Nome interno del campo Lookup
 // Variabili sito Presenze (per sincronizzazione)
 let siteIdPresenze = null;
 let presenzeListId = null;
+let presenzeColonne = null;              // nomi interni delle colonne della lista Presenze
+let presenzeIdGiornaleCol = 'IdGiornale'; // colonna che collega la presenza al giornale
+let presenzeIdGiornaleNum = false;        // true se quella colonna è di tipo Numero
+let PERSONALE_EMAIL = {};                 // nome normalizzato -> email (dalla lista Personale, se ha la colonna)
 
 // Variabili form
 let archIdx = 0;
@@ -1478,6 +1482,18 @@ async function getPresenzeIds() {
     if (listData.value.length > 0) {
         presenzeListId = listData.value[0].id;
         console.log("Lista Presenze ID:", presenzeListId);
+        try {
+            const cr = await fetch(
+                `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/columns?$select=name,number`,
+                { headers: { 'Authorization': `Bearer ${accessToken}` } }
+            );
+            if (cr.ok) {
+                const cols = (await cr.json()).value || [];
+                presenzeColonne = new Set(cols.map(c => c.name));
+                const col = cols.find(c => c.name === 'IdGiornale') || cols.find(c => c.name === 'GiornaleId');
+                if (col) { presenzeIdGiornaleCol = col.name; presenzeIdGiornaleNum = !!col.number; }
+            }
+        } catch (e) { console.warn('⚠️ Colonne Presenze non lette:', e.message); }
     }
 }
 
@@ -1631,11 +1647,14 @@ async function loadPersonale() {
         const data = await response.json();
         ELENCO_ARCHEOLOGI = [];
         ELENCO_OPERAI = [];
+        PERSONALE_EMAIL = {};
         
         data.value.forEach(item => {
             const nome  = (item.fields.Title || '').trim();
             const ruolo = (item.fields.Ruolo  || '').trim().toLowerCase();
             if (!nome) return;
+            const mail = (item.fields.Email || item.fields.EMail || item.fields.Mail || '').toString().trim().toLowerCase();
+            if (mail.includes('@')) PERSONALE_EMAIL[nome.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ')] = mail;
             if (ruolo === 'archeologo' || ruolo === 'archeologi') {
                 ELENCO_ARCHEOLOGI.push(nome);
             } else if (ruolo === 'operaio' || ruolo === 'operai') {
@@ -2979,137 +2998,136 @@ function resetFormG() {
 // ========================================
 
 async function syncToPresenze(giornaleId, dataGiornale, cantiere, archeologi, operai) {
+    // Ritorna un riepilogo { create, errori:[], senzaEmail:[] } da mostrare all'utente
+    const esito = { create: 0, errori: [], senzaEmail: [] };
     if (!siteIdPresenze || !presenzeListId) {
-        console.log('⚠️ Sync presenze disabilitata (sito/lista non disponibile)');
-        return;
+        esito.errori.push('sito/lista Presenze non raggiungibile');
+        return esito;
     }
-    
     const codComm = cantiere?.codiceCommessa || cantiere?.codComm || '';
     if (!codComm) {
-        console.warn('⚠️ Cantiere senza codice commessa — skip sync presenze');
-        return;
+        esito.errori.push('il cantiere non ha codice commessa');
+        return esito;
     }
-    
-    console.log(`🔄 Sync presenze per giornale ${giornaleId}...`);
-    
-    const persone = [...archeologi, ...operai];
-    
+    const persone = [...(archeologi || []), ...(operai || [])];
+    if (!persone.length) return esito;
+
+    // Idempotente: rimuove eventuali presenze già collegate a questo giornale prima di ricrearle
+    await deletePresenzeByGiornale(giornaleId);
+
     for (const persona of persone) {
-        const nome = persona.name || persona.nome;
-        const ore = persona.ore;
-        
+        const nome = (persona.name || persona.nome || '').trim();
+        const ore = parseFloat(persona.ore);
         if (!nome || !ore || ore <= 0) continue;
-        
+
+        const email = trovaEmailPersona(nome);
+        if (!email) esito.senzaEmail.push(nome);
+
+        const fields = soloColonnePresenze({
+            Title: `${dataGiornale}`,
+            DataPresenza: dataGiornale,
+            Ore: ore,
+            TipoPresenza: 'cantiere',
+            CodiceCommessa: codComm,
+            NomeCantiere: cantiere?.title || '',
+            UtenteEmail: email,
+            UtenteName: nome,
+            Fonte: 'gdl',
+            Modificabile: false,
+            [presenzeIdGiornaleCol]: valoreIdGiornale(giornaleId)
+        });
         try {
-            // Cerca presenza esistente: stessa data + nome + commessa
-            const filter = `fields/DataPresenza eq '${dataGiornale}' and fields/UtenteNome eq '${nome}' and fields/CodiceCommessa eq '${codComm}'`;
-            const searchUrl = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items?$filter=${encodeURIComponent(filter)}&$expand=fields`;
-            
-            const searchResp = await fetch(searchUrl, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            });
-            
-            if (!searchResp.ok) {
-                console.warn(`⚠️ Errore ricerca presenza per ${nome}`);
-                continue;
-            }
-            
-            const existing = await searchResp.json();
-            
-            if (existing.value.length > 0) {
-                // Aggiorna: somma ore
-                const item = existing.value[0];
-                const oreAttuali = parseFloat(item.fields.Ore) || 0;
-                const oreNuove = oreAttuali + ore;
-                
-                const updateUrl = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items/${item.id}/fields`;
-                const updateResp = await fetch(updateUrl, {
-                    method: 'PATCH',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        Ore: oreNuove,
-                        GiornaleId: giornaleId
-                    })
-                });
-                
-                if (updateResp.ok) {
-                    console.log(`  ✅ ${nome}: ore ${oreAttuali} → ${oreNuove}`);
-                } else {
-                    console.warn(`  ⚠️ Errore aggiornamento ${nome}`);
-                }
-            } else {
-                // Crea nuova presenza
-                const createUrl = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items`;
-                const createResp = await fetch(createUrl, {
+            const r = await fetch(
+                `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items`,
+                {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        fields: {
-                            Title: `${dataGiornale}`,
-                            DataPresenza: dataGiornale,
-                            Ore: ore,
-                            TipoPresenza: 'lavoro',
-                            CodiceCommessa: codComm,
-                            UtenteNome: nome,
-                            UtenteEmail: '', // opzionale
-                            GiornaleId: giornaleId
-                        }
-                    })
-                });
-                
-                if (createResp.ok) {
-                    console.log(`  ✅ ${nome}: creata presenza ${ore}h`);
-                } else {
-                    console.warn(`  ⚠️ Errore creazione presenza ${nome}`);
+                    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fields })
                 }
+            );
+            if (r.ok) {
+                esito.create++;
+            } else {
+                let m = '';
+                try { m = (await r.json())?.error?.message || ''; } catch (_) {}
+                esito.errori.push(`${nome}: ${r.status} ${m}`);
             }
         } catch (e) {
-            console.warn(`⚠️ Errore sync ${nome}:`, e.message);
+            esito.errori.push(`${nome}: ${e.message}`);
         }
     }
-    
-    console.log('✅ Sync presenze completata');
+    console.log('🔄 Sync presenze:', esito);
+    return esito;
+}
+
+// Testo da mostrare all'utente dopo la sync ('' se tutto ok)
+function escapeSync(t) {
+    return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function avvisoSyncPresenze(esito) {
+    if (!esito) return '';
+    const parti = [];
+    if (esito.errori.length) parti.push(`Presenze non sincronizzate: ${esito.errori.join('; ')}`);
+    if (esito.senzaEmail.length) parti.push(`Email non trovata per: ${esito.senzaEmail.join(', ')} (presenza creata ma visibile solo agli admin)`);
+    return parti.join('\n');
+}
+
+// Cerca l'email di una persona: prima nella lista Personale, poi nella lista Utenti (per nome)
+function trovaEmailPersona(nome) {
+    const norm = x => (x || '').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+    const n = norm(nome);
+    const inv = n.split(' ').reverse().join(' ');
+    if (PERSONALE_EMAIL[n]) return PERSONALE_EMAIL[n];
+    if (PERSONALE_EMAIL[inv]) return PERSONALE_EMAIL[inv];
+    const u = (utentiData || []).find(x => { const k = norm(x.nome); return k === n || k === inv; });
+    return u && u.email && u.email.includes('@') ? u.email.toLowerCase() : '';
+}
+
+// Tiene solo i campi che esistono davvero nella lista Presenze (evita "Field ... is not recognized")
+function soloColonnePresenze(fields) {
+    if (!presenzeColonne) return fields;
+    const out = {};
+    for (const [k, v] of Object.entries(fields)) {
+        if (k === 'Title' || presenzeColonne.has(k)) out[k] = v;
+        else console.warn(`⚠️ Colonna Presenze inesistente, campo ignorato: ${k}`);
+    }
+    return out;
+}
+
+function valoreIdGiornale(id) {
+    return presenzeIdGiornaleNum ? Number(id) : String(id);
 }
 
 async function deletePresenzeByGiornale(giornaleId) {
     if (!siteIdPresenze || !presenzeListId) return;
-    
-    console.log(`🗑️ Eliminazione presenze collegate al giornale ${giornaleId}...`);
-    
     try {
-        const filter = `fields/GiornaleId eq ${giornaleId}`;
-        const searchUrl = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items?$filter=${encodeURIComponent(filter)}`;
-        
-        const searchResp = await fetch(searchUrl, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-        });
-        
-        if (!searchResp.ok) {
-            console.warn('⚠️ Errore ricerca presenze da eliminare');
-            return;
-        }
-        
-        const items = await searchResp.json();
-        
-        for (const item of items.value) {
-            const deleteUrl = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items/${item.id}`;
-            const deleteResp = await fetch(deleteUrl, {
-                method: 'DELETE',
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            });
-            
-            if (deleteResp.ok) {
-                console.log(`  ✅ Presenza ${item.id} eliminata`);
+        const v = valoreIdGiornale(giornaleId);
+        const filter = `fields/${presenzeIdGiornaleCol} eq ${presenzeIdGiornaleNum ? v : `'${v}'`}`;
+        let url = `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items?$filter=${encodeURIComponent(filter)}&$select=id`;
+        const ids = [];
+        while (url) {
+            const r = await fetch(url, { headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Prefer': 'HonorNonIndexedQueriesWarningMayFailRandomly'
+            }});
+            if (!r.ok) {
+                let m = '';
+                try { m = (await r.json())?.error?.message || ''; } catch (_) {}
+                console.warn('⚠️ Errore ricerca presenze da eliminare:', r.status, m);
+                return;
             }
+            const d = await r.json();
+            d.value.forEach(i => ids.push(i.id));
+            url = d['@odata.nextLink'] || null;
         }
-        
-        console.log(`✅ ${items.value.length} presenze eliminate`);
+        for (const id of ids) {
+            await fetch(
+                `https://graph.microsoft.com/v1.0/sites/${siteIdPresenze}/lists/${presenzeListId}/items/${id}`,
+                { method: 'DELETE', headers: { 'Authorization': `Bearer ${accessToken}` } }
+            );
+        }
+        if (ids.length) console.log(`🗑️ ${ids.length} presenze del giornale ${giornaleId} eliminate`);
     } catch (e) {
         console.warn('⚠️ Errore eliminazione presenze:', e.message);
     }
@@ -3297,9 +3315,12 @@ async function saveGiornale() {
         msg.innerHTML = '<div class="success">🔄 Sincronizzazione presenze...</div>';
         
         // Sincronizza presenze
-        await syncToPresenze(gid, data, cantiereSelezionato, arch, op);
+        const esitoSync = await syncToPresenze(gid, data, cantiereSelezionato, arch, op);
+        const avvSync = avvisoSyncPresenze(esitoSync);
         
-        msg.innerHTML = '<div class="success">🎉 Completato!</div>';
+        msg.innerHTML = avvSync
+            ? `<div class="success">🎉 Giornale salvato!</div><div class="error" style="margin-top:8px;white-space:pre-line">⚠️ ${escapeSync(avvSync)}</div>`
+            : '<div class="success">🎉 Completato!</div>';
         btn.textContent = '💾 Salva Giornale';
         btn.disabled = false;
         
@@ -5277,13 +5298,15 @@ async function saveEditGiornale() {
         
         // 4. Sincronizza presenze (elimina vecchie + ricrea)
         btnSave.textContent = '🔄 Sync presenze...';
-        await deletePresenzeByGiornale(editingGiornaleId);
-        await syncToPresenze(editingGiornaleId, data, cantiereSelezionato, archeologiFiltrati, operaiFiltrati);
+        const esitoSync = await syncToPresenze(editingGiornaleId, data, cantiereSelezionato, archeologiFiltrati, operaiFiltrati);
+        const avvSync = avvisoSyncPresenze(esitoSync);
         
         closeEditGiornale();
         displayGiornali();
         
-        alert('✏️ Giornale, foto e presenze modificati con successo!');
+        alert(avvSync
+            ? '✏️ Giornale e foto modificati.\n\n⚠️ ' + avvSync
+            : '✏️ Giornale, foto e presenze modificati con successo!');
         
     } catch (e) {
         console.error('Errore nel salvataggio:', e);
