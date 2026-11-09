@@ -1225,12 +1225,16 @@ let editFotoList = []; // Array unificato: [{ url/preview, isNew: bool, file? }]
 
 // Restituisce i cantieri assegnati all'utente corrente
 function getCantieriAssegnati() {
-    // Admin e Supervisor vedono tutti i cantieri
+    // Visibilità: Admin e Supervisor vedono tutti i cantieri (consultazione, validazione)
     if (currentUserRole === 'admin' || currentUserRole === 'supervisor') {
         return cantieriData;
     }
-    
-    // Operator: filtra in base ai cantieri assegnati
+    return getCantieriPersonali();
+}
+
+// Cantieri su cui l'utente può compilare un giornale: SOLO quelli assegnati
+// nella lista Utenti (CantieriAssegnati), qualunque sia il ruolo
+function getCantieriPersonali() {
     const userEmail = currentUser.username || currentUser.email;
     
     console.log('🔍 DEBUG getCantieriAssegnati:');
@@ -2145,7 +2149,10 @@ function popCant() {
     sel.innerHTML = '<option value="">Seleziona cantiere...</option>';
     
     // Ottieni i cantieri da mostrare in base al ruolo
-    const cantieriDaMostrare = getCantieriAssegnati();
+    const cantieriDaMostrare = getCantieriPersonali();
+    if (!cantieriDaMostrare.length) {
+        sel.innerHTML = '<option value="">Nessun cantiere assegnato: chiedi a un amministratore</option>';
+    }
     
     cantieriDaMostrare.forEach(c => {
         sel.innerHTML += `<option value="${c.id}">${c.title} - ${c.codiceCommessa}</option>`;
@@ -6536,7 +6543,7 @@ function editUtente(id) {
 
 function popolaCantieriModal(cantieriIds) {
     const container = document.getElementById('mUserCantieri');
-    let html = '<p style="margin-bottom:15px;color:#666;font-size:14px">Seleziona i cantieri (solo per Operator):</p>';
+    let html = '<p style="margin-bottom:15px;color:#666;font-size:14px">Cantieri su cui la persona lavora (giornali e ore), per qualsiasi ruolo:</p>';
     
     if (cantieriData.length === 0) {
         html += '<p style="color:#999">Nessun cantiere disponibile</p>';
