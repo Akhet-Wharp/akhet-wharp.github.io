@@ -6446,56 +6446,63 @@ function displayUtenti() {
     
     const m365Users = utentiData.filter(u => u.tipoLogin !== 'esterno');
     const esterniUsers = utentiData.filter(u => u.tipoLogin === 'esterno');
+    const th = 'text-align:left;padding:10px 8px;font-size:12px;font-weight:700;color:#7f8c8d;letter-spacing:.5px;border-bottom:2px solid #e0d8c8';
     
-    let html = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px">
-            <div>
-                <span style="font-size:13px;color:#666">👥 ${utentiData.length} utenti totali &nbsp;·&nbsp; 
-                🏢 ${m365Users.length} Microsoft 365 &nbsp;·&nbsp; 
-                🔗 ${esterniUsers.length} esterni</span>
-            </div>
+    container.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <span style="font-size:13px;color:#666">👥 ${utentiData.length} utenti &nbsp;·&nbsp; 🏢 ${m365Users.length} Microsoft 365 &nbsp;·&nbsp; 🔗 ${esterniUsers.length} esterni</span>
             <button class="btn btn-success" onclick="openNuovoUtenteModal()">➕ Aggiungi Utente</button>
         </div>
-    `;
-    
-    if (utentiData.length === 0) {
-        html += '<div class="info">👥 Nessun utente nella lista. Clicca "Aggiungi Utente" per iniziare.</div>';
-        container.innerHTML = html;
+        <input type="text" id="gdlUtentiCerca" placeholder="🔍 Cerca nome, email, ruolo..." oninput="renderRigheUtenti()"
+            style="width:100%;padding:11px 14px;border:1px solid #e0d8c8;border-radius:8px;font-size:14px;margin-bottom:12px;box-sizing:border-box">
+        <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:14px">
+                <thead><tr>
+                    <th style="${th}">NOME</th><th style="${th}">EMAIL</th><th style="${th}">RUOLO</th>
+                    <th style="${th}">ACCESSO</th><th style="${th}">CANTIERI</th><th style="${th};text-align:right">AZIONI</th>
+                </tr></thead>
+                <tbody id="gdlUtentiRighe"></tbody>
+            </table>
+        </div>`;
+    renderRigheUtenti();
+}
+
+function renderRigheUtenti() {
+    const tb = document.getElementById('gdlUtentiRighe');
+    if (!tb) return;
+    const q = (document.getElementById('gdlUtentiCerca')?.value || '').toLowerCase();
+    const roleCol = { admin: '#e74c3c', supervisor: '#f39c12', operator: '#27ae60' };
+    const td = 'padding:10px 8px;border-bottom:1px solid #f0ebe0;vertical-align:middle';
+    const lista = utentiData
+        .filter(u => !q || `${u.nome} ${u.email} ${u.ruolo}`.toLowerCase().includes(q))
+        .sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'it', { sensitivity: 'base' }));
+    if (!lista.length) {
+        tb.innerHTML = `<tr><td colspan="6" style="${td};color:#999;text-align:center">${utentiData.length ? 'Nessun utente trovato' : 'Nessun utente: clicca "Aggiungi Utente" per iniziare'}</td></tr>`;
         return;
     }
-    
-    html += '<div style="display:grid;gap:15px">';
-    
-    utentiData.forEach(user => {
-        const roleIcon = { 'admin': '👑', 'supervisor': '✅', 'operator': '👤' }[user.ruolo] || '👤';
-        const roleColor = { 'admin': '#e74c3c', 'supervisor': '#f39c12', 'operator': '#b8423a' }[user.ruolo] || '#b8423a';
-        const cantieri = user.cantieriAssegnati ? user.cantieriAssegnati.split(',').filter(x => x.trim()).length : 0;
+    tb.innerHTML = lista.map(user => {
+        const ids = user.cantieriAssegnati ? user.cantieriAssegnati.split(',').map(x => x.trim()).filter(Boolean) : [];
+        const nomi = ids.map(id => cantieriData.find(c => String(c.id) === id)).filter(Boolean)
+            .map(c => `${c.codiceCommessa || ''} ${c.title}`.trim()).join('\n');
         const isEsterno = user.tipoLogin === 'esterno';
-        const loginBadge = isEsterno 
+        const accesso = isEsterno
             ? '<span style="background:#e8f4fd;color:#2980b9;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">🔗 Esterno</span>'
             : '<span style="background:#eafaf1;color:#27ae60;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">🏢 M365</span>';
-        
-        html += `
-            <div class="card">
-                <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:10px">
-                    <div style="flex:1">
-                        <h4 style="margin:0 0 8px 0">${roleIcon} ${user.nome} ${loginBadge}</h4>
-                        <p style="margin:3px 0"><strong>Email:</strong> ${user.email}</p>
-                        <p style="margin:3px 0"><strong>Ruolo:</strong> <span style="color:${roleColor};font-weight:600;text-transform:uppercase">${user.ruolo}</span></p>
-                        <p style="margin:3px 0"><strong>Cantieri:</strong> ${cantieri > 0 ? cantieri + ' assegnati' : 'Tutti'}</p>
-                        ${isEsterno ? `<p style="margin:3px 0;font-size:12px;color:#888"><strong>Accesso:</strong> Magic Link (link temporaneo)</p>` : ''}
-                    </div>
-                    <div style="display:flex;flex-direction:column;gap:8px;min-width:160px">
-                        <button class="btn btn-warning small-btn" onclick="editUtente('${user.id}')">✏️ Modifica</button>
-                        ${isEsterno ? `<button class="btn btn-primary small-btn" onclick="generaEMostraLink('${user.id}')">🔗 Genera Link</button>` : ''}
-                    </div>
-                </div>
-            </div>
-        `;
-    });
-    
-    html += '</div>';
-    container.innerHTML = html;
+        const cant = ids.length
+            ? `<span title="${(nomi || '').replace(/"/g, '&quot;')}" style="cursor:help;border-bottom:1px dotted #aaa">${ids.length} assegnat${ids.length === 1 ? 'o' : 'i'}</span>`
+            : '<span style="color:#e67e22">nessuno</span>';
+        return `<tr onmouseover="this.style.background='#faf7f0'" onmouseout="this.style.background=''">
+            <td style="${td};font-weight:700;color:#2c3e50">${user.nome || '—'}</td>
+            <td style="${td};font-size:13px;color:#555">${user.email}</td>
+            <td style="${td}"><span style="background:${roleCol[user.ruolo] || '#95a5a6'};color:#fff;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600">${user.ruolo}</span></td>
+            <td style="${td}">${accesso}</td>
+            <td style="${td};font-size:13px">${cant}</td>
+            <td style="${td};text-align:right;white-space:nowrap">
+                ${isEsterno ? `<button class="btn btn-primary small-btn" onclick="generaEMostraLink('${user.id}')" title="Genera link di accesso">🔗</button>` : ''}
+                <button class="btn btn-warning small-btn" onclick="editUtente('${user.id}')" title="Modifica utente e cantieri">✏️</button>
+            </td>
+        </tr>`;
+    }).join('');
 }
 
 // Apri modal nuovo utente
